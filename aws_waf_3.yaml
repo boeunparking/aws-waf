@@ -1,0 +1,451 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation Template for the Project
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Project Name
+  RegionName:
+    Type: String
+    Description: Region Name
+    AllowedValues:
+      - seoul
+  AdminIp:
+    Type: String
+    Description: Admin Public IP Address
+    Default: 0.0.0.0/0
+
+Conditions:
+  Seoul: !Equals [!Ref "AWS::Region", ap-northeast-2]
+
+Resources:
+# VPC & Internet Gateway
+  WafVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.16.0.0/16
+      Tags:
+        - Key: Name
+          Value: waf-vpc
+
+  WafIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: waf-igw
+
+  WafIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref WafIgw
+      VpcId: !Ref WafVpc
+
+# Subnet & Route Table
+  WafPubSn1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WafVpc
+      AvailabilityZone: ap-northeast-2a
+      CidrBlock: 172.16.1.0/24
+      Tags:
+        - Key: Name
+          Value: waf-pub-sn1
+
+  WafPubSn2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WafVpc
+      AvailabilityZone: ap-northeast-2c
+      CidrBlock: 172.16.2.0/24
+      Tags:
+        - Key: Name
+          Value: waf-pub-sn2
+
+  WafPubRt12:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WafVpc
+      Tags:
+        - Key: Name
+          Value: waf-pub-rt12
+
+  WafPubRtAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref WafPubRt12
+      SubnetId: !Ref WafPubSn1
+
+  WafPubRtAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref WafPubRt12
+      SubnetId: !Ref WafPubSn2
+
+  WafPubRtDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref WafPubRt12
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref WafIgw
+
+# 프라이빗 서브넷 3
+  PriSn3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WafVpc
+      CidrBlock: 172.16.3.0/24
+      AvailabilityZone: ap-northeast-2a
+
+# 프라이빗 서브넷 4
+  PriSn4:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WafVpc
+      CidrBlock: 172.16.4.0/24
+      AvailabilityZone: ap-northeast-2c
+
+# 프라이빗 라우팅 테이블 생성
+  PriRt34:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WafVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-pri-rt34
+
+# 프라이빗 라우팅 테이블을 서브넷 3에 연결
+  PriRt34PriSn3Ass:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PriSn3
+      RouteTableId: !Ref PriRt34
+
+# 프라이빗 라우팅 테이블을 서브넷 4에 연결
+  PriRt34PriSn4Ass:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PriSn4
+      RouteTableId: !Ref PriRt34
+
+# 퍼블릭 라우팅 테이블에 기본 경로 설정
+  PriRt34DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NatGateway
+    Properties:
+      RouteTableId: !Ref PriRt34
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+# 탄력적 IP와 NAT 게이트웨이 생성
+  NatGwEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-nat-gw-eip
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+        AllocationId: !GetAtt NatGwEip.AllocationId
+        SubnetId: !Ref WafPubSn1
+        Tags:
+          - Key: Name
+            Value: !Sub ${ProjectName}-nat-gw
+
+#DB subnet 5,6생성
+# DB subnet 5
+  DbSn5:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WafVpc
+      CidrBlock: 172.16.5.0/24
+      AvailabilityZone: ap-northeast-2a
+
+# 프라이빗 서브넷 4
+  DbSn6:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WafVpc
+      CidrBlock: 172.16.6.0/24
+      AvailabilityZone: ap-northeast-2c
+
+# 프라이빗 라우팅 테이블 생성
+  DbSnRt56:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WafVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-pri-rt56
+
+# DB 라우팅 테이블을 서브넷 5에 연결
+  DbSnRt56PriSn5Ass:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DbSn5
+      RouteTableId: !Ref DbSnRt56
+
+# DB 라우팅 테이블을 서브넷 6에 연결
+  DbSnRt56PriSn6Ass:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DbSn6
+      RouteTableId: !Ref DbSnRt56
+
+# OpenVPN & Security Group & EIP
+  OpenvpnSg:
+    Type: AWS::EC2::SecurityGroup
+    Condition: Seoul
+    Properties:
+      GroupDescription: !Sub "${RegionName} OpenVPN Security Group"
+      VpcId: !Ref WafVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: Allow TCP 22 for Admin SSH access
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow TCP 80 for Admin HTTPS access
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow TCP 443 for Admin HTTPS access
+        - IpProtocol: tcp
+          FromPort: 943
+          ToPort: 943
+          CidrIp: 0.0.0.0/0
+          Description: Allow TCP 943 for Admin web management
+        - IpProtocol: tcp
+          FromPort: 945
+          ToPort: 945
+          CidrIp: 0.0.0.0/0
+          Description: Allow TCP 945 for internal communication
+        - IpProtocol: udp
+          FromPort: 1194
+          ToPort: 1194
+          CidrIp: 0.0.0.0/0
+          Description: Allow UDP 1194 for VPN data
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 172.16.0.0/16
+          Description: Allow ICMP for internal communication test
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${RegionName}-openvpn-sg"
+
+  Openvpn:
+    Type: AWS::EC2::Instance
+    Condition: Seoul
+    Properties:
+      ImageId: ami-051d52e500c684ec4
+      InstanceType: t3.micro
+      KeyName: !Ref WafKeyPair
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          PrivateIpAddress: 172.16.2.100
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref OpenvpnSg
+          SubnetId: !Ref WafPubSn2
+      Tags:
+        - Key : Name
+          Value : !Sub "${ProjectName}-${RegionName}-openvpn"
+
+  OpenvpnEip:
+    Type: AWS::EC2::EIP
+    Condition: Seoul
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${RegionName}-openvpn-eip"
+
+  OpenvpnEipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Condition: Seoul
+    Properties:
+      AllocationId: !GetAtt OpenvpnEip.AllocationId
+      InstanceId: !Ref Openvpn
+
+# EC2 & Key Pair & Security Group
+  WafKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: waf-key
+      PublicKeyMaterial: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC2a3gPxMgRHF3T8ynFJWNJa1E+GbmWNougyo+2E0S+Ye9yGf5tKRG0nsXxWhc3FRJt0D8uawDrkxH029ToypYnd4mj986c0+K+i/l2zl+CYsbyx07X+J86Jy2vrVn58vP7RkAwJSJR+YTeJT6Q4r03gBm2TxNJ6AOXSa1yVk7Rq51sMPQTttirP0ZcWTEMXeZUtsr0rXhxezErBFdQz4YR9RoZMHo9AQkNz3FBZjWuC49Ax6JGquunxgjfb579YQzxFuS3CiuQVtbxPIQES9vGbHkpN6fptvvURD277LhFu8IduBB6l6Y6yK22BiXVfF3nSN2ZsIaDjvL5/0rAWT7b rsa-key-20260429
+
+# Web Application Load Balancer & Security Group
+  WebAlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref WafVpc
+      GroupDescription: !Sub "${AWS::Region} Web ALB Security Group"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key : Name
+          Value : !Sub "${ProjectName}-${RegionName}-web-alb-sg"
+
+  WebAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Name: !Sub "${ProjectName}-${RegionName}-web-alb"
+      SecurityGroups:
+        - !Ref WebAlbSg
+      Subnets:
+        - !Ref WafPubSn1
+        - !Ref WafPubSn2
+
+  WebAlbTg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-${RegionName}-web-tg"
+      Port: 80
+      Protocol: HTTP
+      HealthCheckPath: '/'
+      HealthCheckIntervalSeconds: 10
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      VpcId: !Ref WafVpc
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: 3600
+      Tags:
+        - Key : Name
+          Value : !Sub "${ProjectName}-${RegionName}-web-tg"
+
+  WebAlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebAlbTg
+      LoadBalancerArn: !Ref WebAlb
+      Port: 80
+      Protocol: HTTP
+
+# LaunchTemplate & Security Group
+  WebSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref WafVpc
+      GroupDescription: !Sub "${AWS::Region} Web Instance Security Group"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 172.16.0.0/16
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref WebAlbSg
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref WebAlbSg
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 172.16.2.100/32
+      Tags:
+        - Key : Name
+          Value : !Sub "${ProjectName}-${RegionName}-web-sg"
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${ProjectName}-${RegionName}-lt"
+      VersionDescription: version 1.0
+      LaunchTemplateData:
+        ImageId: ami-02a3f5c28cfe49cec
+        InstanceType: t2.micro
+        KeyName: !Ref WafKeyPair
+        SecurityGroupIds:
+          - !Ref WebSg
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            yum install -y httpd mariadb-server mariadb php php-mysql php-gd wget unzip
+            systemctl start httpd mariadb
+            systemctl enable httpd mariadb
+            echo -e "\n\ntest1234\ntest1234\ny\ny\ny\ny\n" | /usr/bin/mysql_secure_installation
+            mysql -uroot -ptest1234 -e "create database dvwa; grant all on dvwa.* to 'dvwa'@'localhost' identified by 'p@ssw0rd'; flush privileges;"
+            wget https://github.com/digininja/DVWA/archive/refs/heads/master.zip
+            unzip master.zip
+            mv DVWA-master/* /var/www/html/
+            mv DVWA-master/.htaccess /var/www/html/
+            cp /var/www/html/config/config.inc.php.dist /var/www/html/config/config.inc.php
+            sed -i "s/DVWA\[ 'disable_authentication' \] = false/DVWA\[ 'disable_authentication' \] = true/g" /var/www/html/config/config.inc.php
+            sed -i "s/DVWA\[ 'default_security_level' \] = 'impossible'/DVWA\[ 'default_security_level' \] = 'low'/g" /var/www/html/config/config.inc.php
+            sed -i "s/allow_url_include = Off/allow_url_include = On/g" /etc/php.ini
+            chmod 777 /var/www/html/config
+            chmod 777 /var/www/html/hackable/uploads
+            chmod 666 /var/www/html/external/recaptcha/recaptchalib.php
+            cat << 'EOF' > /var/www/html/404.html
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>404 Not Found</title>
+                <style>
+                    body { font-family: "Arial", sans-serif; background-color: #f1f1f1; text-align: center; padding-top: 100px; }
+                    h1 { font-size: 60px; color: #333; margin-bottom: 0; }
+                    p { font-size: 20px; color: #666; }
+                </style>
+            </head>
+            <body>
+                <h1>404 Not Found</h1>
+                <p>The requested URL was not found on this server.</p>
+            </body>
+            </html>
+            EOF
+            echo "ErrorDocument 404 /404.html" >> /var/www/html/.htaccess
+            chown apache:apache /var/www/html/404.html
+            systemctl restart httpd
+
+# Auto Scaling Group & Scaling Policy
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${ProjectName}-${RegionName}-asg"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !Ref PriSn3
+        - !Ref PriSn4
+      TargetGroupARNs:
+        - !Ref WebAlbTg
+      DesiredCapacity: 2
+      MinSize: 2
+      MaxSize: 4
+
+  ScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 50
+...
